@@ -78,6 +78,24 @@ scp -O -r dist/riddle-rm2 root@10.11.99.1:/home/root/riddle
 ssh root@10.11.99.1 /home/root/riddle/riddle-takeover.sh
 ```
 
+## Launching from the device (5-finger tap)
+
+AppLoad would give an app-menu icon but crash-loops on OS 3.28, so there's no
+on-device launcher. `rm2/riddle-launcher.c` is a tiny libc daemon that watches
+the `pt_mt` touch device **without grabbing it** (xochitl keeps working) and
+launches `riddle-takeover.sh` on a 5-finger tap. While riddle runs it grabs the
+device, so the watcher goes quiet until riddle exits — the same 5-finger tap
+that exits riddle can't accidentally relaunch it.
+
+```sh
+rm2/build-launcher.sh                    # build riddle-launcher (SDK gcc, libc only)
+DEVICE=10.11.99.1 rm2/install-launcher.sh  # scp + enable the systemd service
+```
+
+Rising-edge on ≥5 simultaneous slots; a resting palm can rarely trip it. If
+false positives bite, gate on a brief low-motion tap instead (noted in the
+source). Disable: `systemctl disable --now riddle-launcher`.
+
 ## Reply tofu (fixed)
 
 Tom's reply showed rectangle boxes around the first/last characters — the model
