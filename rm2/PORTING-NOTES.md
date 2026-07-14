@@ -135,3 +135,41 @@ wraps replies in smart quotes (“ ”) and Dancing Script has no glyph for them
 `rasterize_line` drew the font's `.notdef` box. `src/script.rs` now skips
 `.notdef` glyphs (GlyphId 0) in both `rasterize_line` and `measure`. Not
 rM2-specific — the same fix applies on ferrari.
+
+## Reply font override (RIDDLE_FONT)
+
+The reply hand is the embedded Dancing Script (`include_bytes!`). To swap it
+without rebuilding, set `RIDDLE_FONT=/path/to.ttf` in `oracle.env` — riddle
+loads it as a `FontVec` at startup (falls back to the built-in if the path is
+unreadable). Used e.g. to point at the on-device Noto Sans KR
+(`/home/root/ttf/NotoSansKR-VariableFont_wght.ttf`) for a more legible hand with
+Korean coverage. `src/script.rs` / `main.rs` / `help.rs` moved from `FontRef`
+(borrowed embedded bytes) to `FontVec` (owned) to allow the runtime file load.
+
+## Oracle backends (the "spirit")
+
+riddle reads the committed page as a PNG and sends it to a **vision** model —
+there is no OCR/transcription step, so a text-only model won't work. Selection
+priority (`src/oracle.rs` → `Oracle::spawn`):
+
+1. **Anthropic (Claude)** — set `RIDDLE_ANTHROPIC_KEY`. Native Messages API
+   (`/v1/messages`, `x-api-key` + `anthropic-version`, base64 `image` blocks,
+   `content_block_delta` SSE) — **not** OpenAI-compatible. `AnthropicOracle` was
+   added specifically for this; every current Claude model is vision-capable.
+   Env: `RIDDLE_ANTHROPIC_MODEL` (default `claude-opus-4-8`; `claude-haiku-4-5`
+   is faster/cheaper), `RIDDLE_ANTHROPIC_BASE`, `RIDDLE_ANTHROPIC_VERSION`,
+   `RIDDLE_ANTHROPIC_MAX_TOKENS`. No `thinking`/`temperature` sent (fast first
+   ink; both would be rejected or slow on Opus 4.8).
+2. **OpenAI-compatible HTTP** — set `RIDDLE_OPENAI_KEY`. `image_url` data-URI,
+   `/chat/completions`. Works with OpenAI, OpenRouter, Gemini's OpenAI endpoint,
+   and **z.ai GLM** (coding plan): `RIDDLE_OPENAI_BASE=https://api.z.ai/api/coding/paas/v4`,
+   `RIDDLE_OPENAI_MODEL=glm-4.5v` (vision VLM; `glm-5v-turbo` is not in the
+   coding plan). GLM must be a `-v`/VLM model — text-only GLM has no vision.
+3. **pi** — used when no HTTP key is set.
+
+Measured first-ink latency on-device (crude "HI TOM" test PNG):
+Claude Haiku 4.5 ~1.0s · Claude Opus 4.8 ~3.3s · GLM-4.5v ~7.8s.
+
+Config lives in `oracle.env` next to the binary (see `oracle.env.example`).
+Verify a backend without launching the diary:
+`./riddle --oracle-test <page.png>`.
