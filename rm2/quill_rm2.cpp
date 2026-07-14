@@ -1,54 +1,57 @@
 // quill_rm2.cpp — reMarkable 2 implementation of the quill C ABI that riddle's
-// takeover backend links (quill_init/width/height/stride/buffer/swap/
-// process_events). Drives the vendor e-ink engine in
+// takeover backend links. Drives the vendor e-ink engine in
 // /usr/lib/plugins/scenegraph/libqsgepaper.so directly, xochitl stopped.
 //
-// Engine behavior verified on-device (OS 3.28.0.162, probe 2026-07-14):
-//  - EPFramebuffer::instance() self-initializes: spawns the SWTCON worker
-//    threads (EPFramebufferQuitterThread, vsync-flip, framegen) and probes the
-//    temperature sensor. Dynamic type on this panel: EPFramebufferCarta1000.
-//  - setBuffers(std::tuple<QImage,QImage>, QImage*) adopts caller-owned
-//    images (format and stride observed switched in the live instance).
-//  - swapBuffers(QRect, EPScreenMode, QFlags<UpdateFlag>) pushes a region.
-//  - The library shuts the engine down cleanly from its own static
-//    destructors, so there is no quill_shutdown in the ABI.
+// Established on-device (OS 3.28.0.162, EPFramebufferCarta1000 panel), from a
+// disassembly of swapBuffers_impl plus on-panel probes:
+//  - EPFramebuffer::instance() self-initializes the SWTCON worker threads; an
+//    explicit EPFramebufferSwtcon::initialize() DEADLOCKS.
+//  - The REAL frame buffer the engine renders from is the inline QImage at
+//    instance+0x50 — Format_RGB32 (BGRA, 4 bytes/px, stride 5616), NOT the
+//    Grayscale8 QImage at +0x60. Writing +0x50's bits reaches the panel.
+//  - swapBuffers(QRegion, EPScreenModeMap, flags) is the flush. Internally it
+//    clips the region to the framebuffer, splits it per screen-mode, and calls
+//    EPFramebufferSwtcon::update() per rect — a true region-scoped update.
+//      flags bit0 (FullUpdate 0x01) forces a full-screen GC16 flash.
+//      flags 0x00 (PartialUpdate) = fast, region-scoped, non-flashing.
+//  - EPScreenModeMap has no exported destructor, so we build one full-screen
+//    map per waveform once at init and reuse it (the ctor pre-assigns the whole
+//    screen to a slot; the actual update area comes from the QRegion argument).
 #include <QCoreApplication>
 #include <QImage>
 #include <QRect>
+#include <QRegion>
+#include <QSize>
 #include <cstdint>
-#include <cstdlib>
-#include <cstring>
-#include <tuple>
+#include <dlfcn.h>
+#include <vector>
 
-// ---- vendor ABI (no headers shipped; declarations match the exported,
-// c++filt-verified dynamic symbols of the 3.28 libqsgepaper.so) ----
-enum EPScreenMode {
-    // Metaobject enum table order (measured): Pen Mono Animation UI Content Sleep.
-    EPS_Pen = 0,
-    EPS_Mono = 1,
-    EPS_Animation = 2,
-    EPS_UI = 3,
-    EPS_Content = 4,
-    EPS_Sleep = 5,
-};
+enum EPScreenMode { EPS_Pen = 0, EPS_Mono = 1, EPS_Animate = 2, EPS_Gray = 3, EPS_Content = 4, EPS_Full = 5 };
+struct Translation { EPScreenMode mode; int slot; };
+class EPFramebuffer { public: static EPFramebuffer* instance(); };
 
-class EPFramebuffer {
-public:
-    enum UpdateFlag { UF_None = 0, UF_Full = 1 };
-    static EPFramebuffer* instance();
-    void setBuffers(std::tuple<QImage, QImage>, QImage*);
-    void swapBuffers(QRect, ::EPScreenMode, QFlags<UpdateFlag>);
-};
+// Inline frameBuffer QImage member offset (disassembly + probe verified).
+static const int FB_QIMAGE_OFFSET = 0x50;
+static const int MAP_BUF = 512;
 
-static const int W = 1404;
-static const int H = 1872;
-
-// Engine reads through its (implicitly shared) copies of these QImages, which
-// alias g_front. We write through the raw pointer only — never through QImage
-// non-const methods — so copy-on-write can never detach the engine's view.
+static int g_w = 1404, g_h = 1872, g_stride = 5616;
 static uint8_t* g_front = nullptr;
-static QImage g_a, g_b, g_extra;
+static EPFramebuffer* g_fb = nullptr;
 static QCoreApplication* g_app = nullptr;
+
+static void (*g_swapRegion)(void*, const QRegion&, const void*, unsigned) = nullptr;
+static void (*g_mapCtor)(void*, QSize, std::vector<Translation>&&) = nullptr;
+static void (*g_setMode)(void*, const QRegion&, EPScreenMode) = nullptr;
+
+alignas(16) static char g_mapPen[MAP_BUF];
+alignas(16) static char g_mapContent[MAP_BUF];
+alignas(16) static char g_mapFull[MAP_BUF];
+
+static void build_map(char* buf, EPScreenMode mode) {
+    std::vector<Translation> empty;
+    g_mapCtor(buf, QSize(g_w, g_h), std::move(empty));
+    g_setMode(buf, QRegion(QRect(0, 0, g_w, g_h)), mode);
+}
 
 extern "C" {
 
@@ -59,40 +62,53 @@ int quill_init() {
     static char* argv[] = {arg0, nullptr};
     g_app = new QCoreApplication(argc, argv);
 
-    EPFramebuffer* fb = EPFramebuffer::instance();
-    if (!fb) return 1;
+    g_fb = EPFramebuffer::instance();
+    if (!g_fb) return 1;
 
-    g_front = (uint8_t*)malloc((size_t)W * H);
-    uint8_t* back = (uint8_t*)malloc((size_t)W * H);
-    if (!g_front || !back) return 2;
-    memset(g_front, 0xFF, (size_t)W * H);
-    memset(back, 0xFF, (size_t)W * H);
+    QImage* engineFb = (QImage*)((char*)g_fb + FB_QIMAGE_OFFSET);
+    g_w = engineFb->width();
+    g_h = engineFb->height();
+    g_stride = (int)engineFb->bytesPerLine();
+    if (g_w <= 0 || g_h <= 0 || engineFb->format() != QImage::Format_RGB32) return 3;
+    g_front = (uint8_t*)engineFb->constBits();   // never detaches
+    if (!g_front) return 4;
 
-    // External-data QImages: the engine's default buffer is Grayscale8, we
-    // hand it caller-owned memory in the same format.
-    g_a = QImage(g_front, W, H, W, QImage::Format_Grayscale8);
-    g_b = QImage(back, W, H, W, QImage::Format_Grayscale8);
-    fb->setBuffers(std::make_tuple(g_a, g_b), &g_extra);
+    void* so = dlopen(nullptr, RTLD_NOW);
+    g_swapRegion = (void (*)(void*, const QRegion&, const void*, unsigned))
+        dlsym(so, "_ZN13EPFramebuffer11swapBuffersERK7QRegionRK15EPScreenModeMap6QFlagsINS_10UpdateFlagEE");
+    g_mapCtor = (void (*)(void*, QSize, std::vector<Translation>&&))
+        dlsym(so, "_ZN15EPScreenModeMapC1E5QSizeOSt6vectorINS_11TranslationESaIS2_EE");
+    g_setMode = (void (*)(void*, const QRegion&, EPScreenMode))
+        dlsym(so, "_ZN15EPScreenModeMap16setModeForRegionERK7QRegion12EPScreenMode");
+    if (!g_swapRegion || !g_mapCtor || !g_setMode) return 5;
+
+    build_map(g_mapPen, EPS_Pen);
+    build_map(g_mapContent, EPS_Content);
+    build_map(g_mapFull, EPS_Full);
     return 0;
 }
 
-int quill_width() { return W; }
-int quill_height() { return H; }
-int quill_stride() { return W; }
-
+int quill_width() { return g_w; }
+int quill_height() { return g_h; }
+int quill_stride() { return g_stride; }
 uint8_t* quill_buffer() { return g_front; }
 
-// riddle's modes: 0 = fastest ink, 3 = balanced text/anim, 4 = flashing clear.
-// ponytail: Content for the flash pass relies on UF_Full for the actual flash;
-// if ghosting survives full_refresh on hardware, revisit with
-// EPScreenModeMap::setModeForRegion + the QRegion overload.
+// riddle modes: 0 = fastest ink, 3 = balanced, 4 = flashing clear.
 uint64_t quill_swap(int x, int y, int w, int h, int mode, int full) {
-    EPFramebuffer* fb = EPFramebuffer::instance();
-    if (!fb) return 0;
-    EPScreenMode m = mode == 0 ? EPS_Pen : mode == 4 ? EPS_Content : EPS_UI;
-    QFlags<EPFramebuffer::UpdateFlag> flags =
-        full ? EPFramebuffer::UF_Full : EPFramebuffer::UF_None;
-    fb->swapBuffers(QRect(x, y, w, h), m, flags);
+    if (!g_swapRegion) return 0;
+    const char* map;
+    unsigned flags;
+    if (full || mode == 4) {
+        map = g_mapFull;
+        flags = 0x01; // FullUpdate: full-screen GC16 flash (de-ghost / clear)
+    } else if (mode == 0) {
+        map = g_mapPen;
+        flags = 0x00; // PartialUpdate: fast, region-scoped, non-flashing ink
+    } else {
+        map = g_mapContent;
+        flags = 0x00; // partial, higher-quality waveform
+    }
+    g_swapRegion(g_fb, QRegion(QRect(x, y, w, h)), map, flags);
     return 0;
 }
 

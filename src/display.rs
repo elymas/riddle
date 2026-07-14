@@ -54,13 +54,9 @@ impl Display {
                 if ptr.is_null() {
                     return Err(io::Error::other("quill buffer null"));
                 }
-                // rM2 quill-rm2 shim exposes the engine's Grayscale8 buffer;
-                // ferrari's libquill exposes QImage Format_RGB32.
-                #[cfg(target_arch = "arm")]
-                let fmt = PixFmt::Gray8;
-                #[cfg(not(target_arch = "arm"))]
-                let fmt = PixFmt::Rgb32;
-                let surface = Surface::new(ptr, stride * h, w, h, stride, fmt);
+                // Both libquill flavours expose the engine's QImage Format_RGB32
+                // aux buffer (ferrari and the rM2 shim alike).
+                let surface = Surface::new(ptr, stride * h, w, h, stride, PixFmt::Rgb32);
                 Ok((Display::Quill, surface))
             }
         }
