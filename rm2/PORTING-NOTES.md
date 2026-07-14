@@ -78,10 +78,10 @@ scp -O -r dist/riddle-rm2 root@10.11.99.1:/home/root/riddle
 ssh root@10.11.99.1 /home/root/riddle/riddle-takeover.sh
 ```
 
-## Known rough edge
+## Reply tofu (fixed)
 
-Tom's reply text (drawn with the fast Pen/A2 waveform, like live ink) can look
-fragmented at the first/last glyphs — the A2 waveform is 2-level and doesn't
-settle crisp text as well as GL16. Candidate fix: give the reply a
-`Content`/`Grayscale` (GL16) waveform or a one-shot quality refresh of the reply
-region when it finishes. Live ink itself is crisp.
+Tom's reply showed rectangle boxes around the first/last characters — the model
+wraps replies in smart quotes (“ ”) and Dancing Script has no glyph for them, so
+`rasterize_line` drew the font's `.notdef` box. `src/script.rs` now skips
+`.notdef` glyphs (GlyphId 0) in both `rasterize_line` and `measure`. Not
+rM2-specific — the same fix applies on ferrari.

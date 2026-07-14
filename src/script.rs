@@ -19,6 +19,12 @@ pub fn rasterize_line(font: &FontRef, text: &str, px: f32) -> Line {
     let mut prev: Option<ab_glyph::GlyphId> = None;
     for c in text.chars() {
         let id = scaled.glyph_id(c);
+        // Skip characters the font has no glyph for (GlyphId 0 = .notdef):
+        // Dancing Script draws .notdef as a rectangle box, which would show up
+        // as tofu around e.g. the smart quotes some models wrap replies in.
+        if id.0 == 0 {
+            continue;
+        }
         if let Some(p) = prev {
             caret += scaled.kern(p, id);
         }
@@ -55,6 +61,9 @@ pub fn measure(font: &FontRef, text: &str, px: f32) -> f32 {
     let mut prev: Option<ab_glyph::GlyphId> = None;
     for c in text.chars() {
         let id = scaled.glyph_id(c);
+        if id.0 == 0 {
+            continue; // .notdef: skipped in rasterize_line too — keep widths in sync
+        }
         if let Some(p) = prev {
             caret += scaled.kern(p, id);
         }
