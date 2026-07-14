@@ -1,2 +1,6 @@
 [target.aarch64-unknown-linux-gnu]
 linker = "aarch64-linux-gnu-gcc"
+
+[target.armv7-unknown-linux-gnueabihf]
+# reMarkable 2. Set by build-rm2.sh to the SDK gcc wrapper.
+linker = "arm-linux-gnueabihf-gcc"

@@ -1,6 +1,13 @@
 //! Geometry helpers. Drawing lives in surface.rs.
 
+// reMarkable 2 (armv7): 1404x1872 grayscale. Paper Pro (aarch64): 1620x2160.
+#[cfg(target_arch = "arm")]
+pub const SCREEN_W: usize = 1404;
+#[cfg(target_arch = "arm")]
+pub const SCREEN_H: usize = 1872;
+#[cfg(not(target_arch = "arm"))]
 pub const SCREEN_W: usize = 1620;
+#[cfg(not(target_arch = "arm"))]
 pub const SCREEN_H: usize = 2160;
 
 /// Grow-only pixel bounding box, used to build update/dissolve regions.

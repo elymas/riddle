@@ -20,7 +20,11 @@ pub const UPDATE_ALL: i32 = 0;
 pub const UPDATE_PARTIAL: i32 = 1;
 
 /// FBFMT_RMPP_RGB565: native 1620x2160, 2 bytes/pixel, stride = 3240.
+#[allow(dead_code)]
 pub const FBFMT_RMPP_RGB565: u8 = 3;
+/// FBFMT_RM2FB: reMarkable 2 native 1404x1872, RGB565, stride = 2808.
+#[allow(dead_code)]
+pub const FBFMT_RM2FB: u8 = 0;
 
 #[allow(dead_code)]
 pub const REFRESH_MODE_UFAST: i32 = 0;

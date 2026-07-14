@@ -8,11 +8,21 @@
 use std::io;
 use std::os::fd::RawFd;
 
+use crate::evdev::{parse, EV_REC};
 use crate::fb::{SCREEN_H, SCREEN_W};
 
-// Digitizer axis ranges on the Paper Pro ("Elan marker input").
+// Digitizer axis ranges (EVIOCGABS-measured).
+// Paper Pro "Elan marker input": axes aligned with the portrait screen.
+#[cfg(not(target_arch = "arm"))]
 const DIGI_MAX_X: i32 = 11180;
+#[cfg(not(target_arch = "arm"))]
 const DIGI_MAX_Y: i32 = 15340;
+// reMarkable 2 "Wacom I2C Digitizer": rotated 90° vs the portrait screen —
+// raw X (the long axis) runs along screen Y, raw Y along screen X.
+#[cfg(target_arch = "arm")]
+const DIGI_MAX_X: i32 = 20966;
+#[cfg(target_arch = "arm")]
+const DIGI_MAX_Y: i32 = 15725;
 pub const MAX_PRESSURE: i32 = 4096;
 
 const EV_SYN: u16 = 0;
@@ -100,18 +110,15 @@ impl PenDevice {
     /// that changed state.
     pub fn drain(&mut self) -> Vec<PenSample> {
         let mut out = Vec::new();
-        // input_event on 64-bit: struct timeval (16) + type u16 + code u16 + value i32.
-        let mut buf = [0u8; 24 * 64];
+        let mut buf = [0u8; EV_REC * 64];
         loop {
             let n =
                 unsafe { libc::read(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
             if n <= 0 {
                 break;
             }
-            for chunk in buf[..n as usize].chunks_exact(24) {
-                let etype = u16::from_le_bytes(chunk[16..18].try_into().unwrap());
-                let code = u16::from_le_bytes(chunk[18..20].try_into().unwrap());
-                let value = i32::from_le_bytes(chunk[20..24].try_into().unwrap());
+            for chunk in buf[..n as usize].chunks_exact(EV_REC) {
+                let (etype, code, value) = parse(chunk);
                 match (etype, code) {
                     (EV_ABS, ABS_X) => {
                         self.raw_x = value;
@@ -148,9 +155,10 @@ impl PenDevice {
                     (EV_SYN, SYN_REPORT) => {
                         if self.dirty {
                             self.dirty = false;
+                            let (x, y) = to_screen(self.raw_x, self.raw_y);
                             out.push(PenSample {
-                                x: self.raw_x * (SCREEN_W as i32 - 1) / DIGI_MAX_X,
-                                y: self.raw_y * (SCREEN_H as i32 - 1) / DIGI_MAX_Y,
+                                x,
+                                y,
                                 pressure: self.pressure,
                                 tool: self.tool,
                                 touching: self.touching,
@@ -175,11 +183,49 @@ impl Drop for PenDevice {
     }
 }
 
+/// Digitizer-to-screen transform.
+#[cfg(not(target_arch = "arm"))]
+#[inline]
+fn to_screen(raw_x: i32, raw_y: i32) -> (i32, i32) {
+    (
+        raw_x * (SCREEN_W as i32 - 1) / DIGI_MAX_X,
+        raw_y * (SCREEN_H as i32 - 1) / DIGI_MAX_Y,
+    )
+}
+
+/// rM2: swap axes (digitizer rotated 90°) and flip to portrait orientation.
+/// ponytail: polarity from libremarkable's rM2 mapping; if strokes come out
+/// mirrored on real hardware set RIDDLE_PEN_INVX/RIDDLE_PEN_INVY=1 to correct
+/// without rebuilding.
+#[cfg(target_arch = "arm")]
+#[inline]
+fn to_screen(raw_x: i32, raw_y: i32) -> (i32, i32) {
+    use std::sync::OnceLock;
+    static INV: OnceLock<(bool, bool)> = OnceLock::new();
+    let (invx, invy) = *INV.get_or_init(|| {
+        (
+            std::env::var("RIDDLE_PEN_INVX").is_ok_and(|v| v == "1"),
+            std::env::var("RIDDLE_PEN_INVY").is_ok_and(|v| v == "1"),
+        )
+    });
+    let mut x = raw_y * (SCREEN_W as i32 - 1) / DIGI_MAX_Y;
+    let mut y = (SCREEN_H as i32 - 1) - raw_x * (SCREEN_H as i32 - 1) / DIGI_MAX_X;
+    if invx {
+        x = (SCREEN_W as i32 - 1) - x;
+    }
+    if invy {
+        y = (SCREEN_H as i32 - 1) - y;
+    }
+    (x, y)
+}
+
 fn find_marker_device() -> io::Result<String> {
     for i in 0..8 {
         let name_path = format!("/sys/class/input/event{i}/device/name");
         if let Ok(name) = std::fs::read_to_string(&name_path) {
-            if name.to_lowercase().contains("marker") {
+            let name = name.to_lowercase();
+            // Paper Pro: "Elan marker input"; reMarkable 2: "Wacom I2C Digitizer".
+            if name.contains("marker") || name.contains("wacom") {
                 return Ok(format!("/dev/input/event{i}"));
             }
         }

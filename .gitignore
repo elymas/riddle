@@ -4,3 +4,7 @@
 
 # Never commit a real API key.
 /oracle.env
+
+# rM2 port: vendor lib pulled from the device (proprietary, never commit)
+rm2/vendor/
+rm2/build/

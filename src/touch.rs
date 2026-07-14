@@ -2,6 +2,7 @@
 //! One-finger swipe pages, two-finger drag scrolls, two-finger tap undoes,
 //! three-finger tap redoes, and five fingers exits.
 
+use crate::evdev::{parse, EV_REC};
 use std::io;
 use std::os::fd::RawFd;
 
@@ -13,8 +14,16 @@ const ABS_MT_POSITION_Y: u16 = 54;
 const ABS_MT_TRACKING_ID: u16 = 57;
 const EVIOCGRAB: libc::c_ulong = 0x40044590;
 const MAX_SLOTS: usize = 16;
+#[cfg(not(target_arch = "arm"))]
 const SCREEN_H: i32 = 2160;
+#[cfg(not(target_arch = "arm"))]
 const TOUCH_MAX_Y: i32 = 2832;
+// rM2 "pt_mt": coordinates already in screen pixel space (0..1871, measured),
+// Y origin at the bottom — inverted at ingest below.
+#[cfg(target_arch = "arm")]
+const SCREEN_H: i32 = 1872;
+#[cfg(target_arch = "arm")]
+const TOUCH_MAX_Y: i32 = 1871;
 const TAP_SLOP: i32 = 45;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,7 +59,9 @@ impl TouchDevice {
         for i in 0..8 {
             let name_path = format!("/sys/class/input/event{i}/device/name");
             if let Ok(name) = std::fs::read_to_string(&name_path) {
-                if name.to_lowercase().contains("touch") {
+                let lname = name.to_lowercase();
+                // Paper Pro: "...touch..."; reMarkable 2: "pt_mt".
+                if lname.contains("touch") || lname.contains("pt_mt") {
                     let path = std::ffi::CString::new(format!("/dev/input/event{i}")).unwrap();
                     let fd =
                         unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_NONBLOCK) };
@@ -91,20 +102,21 @@ impl TouchDevice {
 
     pub fn drain(&mut self) -> Vec<Gesture> {
         let mut out = Vec::new();
-        let mut buf = [0u8; 24 * 64];
+        let mut buf = [0u8; EV_REC * 64];
         loop {
             let n =
                 unsafe { libc::read(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
             if n <= 0 {
                 break;
             }
-            for chunk in buf[..n as usize].chunks_exact(24) {
-                let etype = u16::from_le_bytes(chunk[16..18].try_into().unwrap());
-                let code = u16::from_le_bytes(chunk[18..20].try_into().unwrap());
-                let value = i32::from_le_bytes(chunk[20..24].try_into().unwrap());
+            for chunk in buf[..n as usize].chunks_exact(EV_REC) {
+                let (etype, code, value) = parse(chunk);
                 if etype == EV_ABS && code == ABS_MT_SLOT {
                     self.cur = (value.max(0) as usize).min(MAX_SLOTS - 1);
                 } else if etype == EV_ABS && code == ABS_MT_POSITION_Y {
+                    // rM2 touch Y origin is at the bottom of the panel.
+                    #[cfg(target_arch = "arm")]
+                    let value = TOUCH_MAX_Y - value;
                     self.slots[self.cur].y = value;
                     if self.slots[self.cur].active && self.slots[self.cur].start_y == i32::MIN {
                         self.slots[self.cur].start_y = value;

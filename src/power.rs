@@ -3,6 +3,7 @@
 //! the suspend itself. If the grab fails we still see the press and draw, and
 //! leave the actual suspend to logind.
 
+use crate::evdev::{parse, EV_REC};
 use std::io;
 use std::os::fd::RawFd;
 
@@ -42,17 +43,15 @@ impl PowerButton {
     /// True if a power-key press (value 1) was seen since the last drain.
     pub fn drain_pressed(&mut self) -> bool {
         let mut pressed = false;
-        let mut buf = [0u8; 24 * 16];
+        let mut buf = [0u8; EV_REC * 16];
         loop {
             let n =
                 unsafe { libc::read(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
             if n <= 0 {
                 break;
             }
-            for chunk in buf[..n as usize].chunks_exact(24) {
-                let etype = u16::from_le_bytes(chunk[16..18].try_into().unwrap());
-                let code = u16::from_le_bytes(chunk[18..20].try_into().unwrap());
-                let value = i32::from_le_bytes(chunk[20..24].try_into().unwrap());
+            for chunk in buf[..n as usize].chunks_exact(EV_REC) {
+                let (etype, code, value) = parse(chunk);
                 if etype == EV_KEY && code == KEY_POWER && value == 1 {
                     pressed = true;
                 }

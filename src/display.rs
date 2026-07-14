@@ -28,18 +28,16 @@ mod quill_ffi {
 impl Display {
     pub fn open() -> io::Result<(Self, Surface)> {
         if let Ok(key) = std::env::var("QTFB_KEY") {
+            #[cfg(target_arch = "arm")]
+            let (fmt, w, h) = (crate::qtfb::FBFMT_RM2FB, 1404usize, 1872usize);
+            #[cfg(not(target_arch = "arm"))]
+            let (fmt, w, h) = (crate::qtfb::FBFMT_RMPP_RGB565, 1620usize, 2160usize);
             let key: i32 = key.parse().map_err(io::Error::other)?;
-            let mut client = crate::qtfb::QtfbClient::connect(
-                key,
-                crate::qtfb::FBFMT_RMPP_RGB565,
-                1620,
-                2160,
-                2,
-            )?;
+            let mut client = crate::qtfb::QtfbClient::connect(key, fmt, w, h, 2)?;
             let _ = client.set_refresh_mode(crate::qtfb::REFRESH_MODE_UFAST);
             let buf = client.framebuffer();
             let (ptr, len) = (buf.as_mut_ptr(), buf.len());
-            let surface = Surface::new(ptr, len, 1620, 2160, 1620 * 2, PixFmt::Rgb565);
+            let surface = Surface::new(ptr, len, w, h, w * 2, PixFmt::Rgb565);
             return Ok((Display::Qtfb(client), surface));
         }
 
@@ -56,7 +54,13 @@ impl Display {
                 if ptr.is_null() {
                     return Err(io::Error::other("quill buffer null"));
                 }
-                let surface = Surface::new(ptr, stride * h, w, h, stride, PixFmt::Rgb32);
+                // rM2 quill-rm2 shim exposes the engine's Grayscale8 buffer;
+                // ferrari's libquill exposes QImage Format_RGB32.
+                #[cfg(target_arch = "arm")]
+                let fmt = PixFmt::Gray8;
+                #[cfg(not(target_arch = "arm"))]
+                let fmt = PixFmt::Rgb32;
+                let surface = Surface::new(ptr, stride * h, w, h, stride, fmt);
                 Ok((Display::Quill, surface))
             }
         }

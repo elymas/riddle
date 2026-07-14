@@ -9,6 +9,8 @@ pub enum PixFmt {
     Rgb565,
     /// 4 bytes/px, QImage Format_RGB32: bytes B,G,R,0xFF.
     Rgb32,
+    /// 1 byte/px luminance, QImage Format_Grayscale8 (rM2 vendor engine).
+    Gray8,
 }
 
 pub struct Surface {
@@ -84,6 +86,12 @@ impl Surface {
                 b[i + 2] = r;
                 b[i + 3] = 0xFF;
             }
+            PixFmt::Gray8 => {
+                // Green channel approximates luma, same as luma() below.
+                let l = (((c >> 5) & 0x3f) as u32 * 255 / 63) as u8;
+                let i = y as usize * stride + x as usize;
+                self.buf()[i] = l;
+            }
         }
     }
 
@@ -105,6 +113,7 @@ impl Surface {
                 // Green approximates luma well enough for mono ink.
                 b[i + 1]
             }
+            PixFmt::Gray8 => b[y as usize * self.stride + x as usize],
         }
     }
 
@@ -141,6 +150,11 @@ impl Surface {
                         buf[i + 2] = !buf[i + 2];
                     }
                 }
+                PixFmt::Gray8 => {
+                    for b in &mut buf[row * stride + x..row * stride + x1] {
+                        *b = !*b;
+                    }
+                }
             }
         }
     }
@@ -150,6 +164,7 @@ impl Surface {
         match self.fmt {
             PixFmt::Rgb565 => 2,
             PixFmt::Rgb32 => 4,
+            PixFmt::Gray8 => 1,
         }
     }
 
