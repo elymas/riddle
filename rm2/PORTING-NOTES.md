@@ -63,13 +63,45 @@ Dead ends (documented so nobody repeats them):
 - All raw `input_event` parsing uses the 16-byte 32-bit-kernel record
   (`src/evdev.rs`), not the 24-byte 64-bit layout.
 
+## Prerequisites
+
+### 1. The vendor lib (`rm2/vendor/libqsgepaper.so`)
+
+The shim links against **your own device's** `libqsgepaper.so` — it is
+reMarkable's proprietary e-ink engine and is **not distributed here**
+(git-ignored). The SDK 3.27 copy won't do: the 3.28 firmware added the
+`swapBuffers`/`EPScreenModeMap` symbols the shim resolves, so it must come from
+a device running OS 3.28.x. Pull it once, from a device on the same OS you'll
+run on:
+
+```sh
+mkdir -p rm2/vendor
+scp -O root@10.11.99.1:/usr/lib/plugins/scenegraph/libqsgepaper.so rm2/vendor/
+```
+
+If the offsets/symbols drift on a future OS, re-pull and re-verify the layout
+constants in `quill_rm2.cpp` (`FB_QIMAGE_OFFSET`, the RGB32 format check) with
+`nm -D rm2/vendor/libqsgepaper.so | c++filt`.
+
+### 2. The rM2 SDK 3.27 Docker image (`rm2sdk:latest`)
+
+```sh
+# Download the official rM2 3.27 toolchain installer, then inside an amd64 container:
+#   https://storage.googleapis.com/remarkable-codex-toolchain/3.27.0.97/rm2/\
+#     remarkable-production-image-5.7.119-rm2-public-x86_64-toolchain.sh
+docker run -d --name rm2build --platform linux/amd64 -v "$PWD:/riddle" ubuntu:22.04 sleep infinity
+docker exec rm2build bash -c 'apt-get update -qq && apt-get install -y -qq xz-utils file binutils gcc &&
+  bash /riddle/<toolchain>.sh -y -d /opt/rm2-sdk'
+```
+
+`build-rm2.sh` / `build-launcher.sh` reuse the running `rm2build` container.
+
 ## Build
 
-`rm2/build-rm2.sh` — cross-compiles inside an amd64 Docker container holding the
+`rm2/build-rm2.sh` — cross-compiles inside the amd64 Docker container holding the
 official **rM2 SDK 3.27** (Qt 6.8, forward-compatible with the device's 6.10).
-The shim links the device's **own** `libqsgepaper.so` (pulled to
-`rm2/vendor/`, git-ignored — proprietary) because the SDK 3.27 copy lacks the
-3.28 symbols. `rm2/make-bundle-rm2.sh` stages `dist/riddle-rm2/`.
+The shim links the device's own `libqsgepaper.so` from `rm2/vendor/` (see
+Prerequisites). `rm2/make-bundle-rm2.sh` stages `dist/riddle-rm2/`.
 
 Deploy (no AppLoad needed):
 
