@@ -170,22 +170,26 @@ impl StreamParser {
     }
 }
 
-/// The diary's spirit. A backend-agnostic front over the two oracle kinds.
+/// The diary's spirit. A backend-agnostic front over the oracle kinds.
 pub enum Oracle {
+    Anthropic(AnthropicOracle),
     Http(HttpOracle),
     Pi(PiOracle),
 }
 
 impl Oracle {
-    /// Pick a backend from the environment and start it. HTTP if
-    /// `RIDDLE_OPENAI_KEY` is set (the zero-setup path), otherwise pi.
-    /// `remember` teaches the model the memory protocol (catalog + ⁂).
+    /// Pick a backend from the environment and start it, in priority order:
+    /// Anthropic (`RIDDLE_ANTHROPIC_KEY`), then OpenAI-compatible HTTP
+    /// (`RIDDLE_OPENAI_KEY`), else pi. `remember` teaches the memory protocol.
     pub fn spawn(remember: bool) -> std::io::Result<Self> {
-        if std::env::var("RIDDLE_OPENAI_KEY").is_ok() {
+        if std::env::var("RIDDLE_ANTHROPIC_KEY").is_ok() {
+            eprintln!("riddle: oracle = Anthropic Messages API");
+            Ok(Oracle::Anthropic(AnthropicOracle::new(remember)?))
+        } else if std::env::var("RIDDLE_OPENAI_KEY").is_ok() {
             eprintln!("riddle: oracle = OpenAI-compatible HTTP");
             Ok(Oracle::Http(HttpOracle::new(remember)?))
         } else {
-            eprintln!("riddle: oracle = pi (set RIDDLE_OPENAI_KEY for the HTTP backend)");
+            eprintln!("riddle: oracle = pi (set RIDDLE_ANTHROPIC_KEY or RIDDLE_OPENAI_KEY for HTTP)");
             Ok(Oracle::Pi(PiOracle::spawn(remember)?))
         }
     }
@@ -194,6 +198,7 @@ impl Oracle {
     /// when the reply is complete.
     pub fn ask(&self, png_path: &str, ctx: &TurnContext, tx: Sender<Result<Event, String>>) {
         match self {
+            Oracle::Anthropic(o) => o.ask(png_path, ctx, tx),
             Oracle::Http(o) => o.ask(png_path, ctx, tx),
             Oracle::Pi(o) => o.ask(png_path, ctx, tx),
         }
@@ -566,6 +571,171 @@ impl HttpOracle {
             // tx drops here → the diary's receiver disconnects = reply complete.
         });
     }
+}
+
+/// The oracle spoken to over Anthropic's Messages API (`/v1/messages`). Same
+/// streaming, sentence-by-sentence shape as HttpOracle, but Claude's wire
+/// format: image blocks are `{type:image, source:{type:base64,…}}` (not
+/// OpenAI's `image_url`), the system prompt is a top-level field, auth is
+/// `x-api-key` + `anthropic-version`, and text arrives in `content_block_delta`
+/// SSE events. All current Claude models are vision-capable.
+pub struct AnthropicOracle {
+    base: String, // e.g. https://api.anthropic.com (no trailing slash, no /v1)
+    key: String,
+    model: String,
+    version: String,
+    max_tokens: u32,
+    remember: bool,
+}
+
+impl AnthropicOracle {
+    pub fn new(remember: bool) -> std::io::Result<Self> {
+        let key = std::env::var("RIDDLE_ANTHROPIC_KEY")
+            .map_err(|_| std::io::Error::other("RIDDLE_ANTHROPIC_KEY not set"))?;
+        let base = std::env::var("RIDDLE_ANTHROPIC_BASE")
+            .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
+        let base = base.trim_end_matches('/').to_string();
+        // Every current Claude model does vision; Opus 4.8 is the default.
+        // For faster/cheaper ink, set RIDDLE_ANTHROPIC_MODEL=claude-haiku-4-5.
+        let model = std::env::var("RIDDLE_ANTHROPIC_MODEL")
+            .unwrap_or_else(|_| "claude-opus-4-8".to_string());
+        let version =
+            std::env::var("RIDDLE_ANTHROPIC_VERSION").unwrap_or_else(|_| "2023-06-01".to_string());
+        let max_tokens = std::env::var("RIDDLE_ANTHROPIC_MAX_TOKENS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2000);
+        eprintln!(
+            "riddle: anthropic oracle base={base} model={model} max_tokens={max_tokens}"
+        );
+        Ok(Self { base, key, model, version, max_tokens, remember })
+    }
+
+    pub fn ask(&self, png_path: &str, ctx: &TurnContext, tx: Sender<Result<Event, String>>) {
+        let img = match std::fs::read(png_path) {
+            Ok(b) => base64(&b),
+            Err(e) => {
+                let _ = tx.send(Err(format!("read image: {e}")));
+                return;
+            }
+        };
+        let (base, key, model, version) = (
+            self.base.clone(),
+            self.key.clone(),
+            self.model.clone(),
+            self.version.clone(),
+        );
+        let max_tokens = self.max_tokens;
+
+        let system = if self.remember {
+            format!("{PERSONA}{MEMORY_PROTOCOL}")
+        } else {
+            PERSONA.to_string()
+        };
+        let mut history_msgs = String::new();
+        for (t, r) in &ctx.history {
+            history_msgs.push_str(&format!(
+                "{{\"role\":\"user\",\"content\":{}}},{{\"role\":\"assistant\",\"content\":{}}},",
+                json_quote(&format!("(an earlier page) {t}")),
+                json_quote(r),
+            ));
+        }
+        let user_text = turn_text(ctx);
+        let catalog_ids = ctx.catalog_ids.clone();
+
+        thread::spawn(move || {
+            let agent = ureq::AgentBuilder::new()
+                .timeout_connect(std::time::Duration::from_secs(10))
+                .timeout_read(std::time::Duration::from_secs(90))
+                .build();
+
+            // Messages API: no `thinking` field → no extended thinking (fast
+            // first ink; Opus 4.8/Haiku run without it). No temperature (removed
+            // on 4.8). The page rides as a base64 `image` block.
+            let body = format!(
+                concat!(
+                    "{{\"model\":{},\"max_tokens\":{},\"stream\":true,",
+                    "\"system\":{},",
+                    "\"messages\":[",
+                    "{}",
+                    "{{\"role\":\"user\",\"content\":[",
+                    "{{\"type\":\"text\",\"text\":{}}},",
+                    "{{\"type\":\"image\",\"source\":{{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"{}\"}}}}",
+                    "]}}]}}"
+                ),
+                json_quote(&model),
+                max_tokens,
+                json_quote(&system),
+                history_msgs,
+                json_quote(&user_text),
+                img,
+            );
+
+            let asked = std::time::Instant::now();
+            let resp = agent
+                .post(&format!("{base}/v1/messages"))
+                .set("x-api-key", &key)
+                .set("anthropic-version", &version)
+                .set("content-type", "application/json")
+                .send_string(&body);
+
+            let reader = match resp {
+                Ok(r) => r.into_reader(),
+                Err(ureq::Error::Status(code, r)) => {
+                    let detail = r.into_string().unwrap_or_default();
+                    let _ = tx.send(Err(format!("http {code}: {}", detail.trim())));
+                    return;
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(format!("request failed: {e}")));
+                    return;
+                }
+            };
+
+            let mut parser = StreamParser::new(catalog_ids);
+            let mut acc = String::new();
+            let mut first = true;
+            let mut emit = |events: Vec<Result<Event, String>>| {
+                for ev in events {
+                    if first {
+                        eprintln!("riddle: oracle first chunk +{}ms", asked.elapsed().as_millis());
+                        first = false;
+                    }
+                    let _ = tx.send(ev);
+                }
+            };
+            for line in BufReader::new(reader).lines().map_while(Result::ok) {
+                let line = line.trim();
+                let Some(data) = line.strip_prefix("data:") else { continue };
+                let data = data.trim();
+                // A mid-stream error event ends the turn.
+                if data.contains("\"type\":\"error\"") {
+                    let msg = json_str_field(data, "message").unwrap_or_else(|| data.to_string());
+                    let _ = tx.send(Err(format!("anthropic stream error: {msg}")));
+                    return;
+                }
+                if let Some(frag) = anthropic_delta_text(data) {
+                    if frag.is_empty() {
+                        continue;
+                    }
+                    acc.push_str(&frag);
+                    emit(parser.advance(&acc, false));
+                }
+            }
+            emit(parser.advance(&acc, true));
+        });
+    }
+}
+
+/// Pull `delta.text` out of one Anthropic `content_block_delta` SSE object.
+/// Returns None for message/ping/other events (and thinking deltas, which
+/// carry no `text` field — though we never request thinking).
+fn anthropic_delta_text(s: &str) -> Option<String> {
+    if !s.contains("\"content_block_delta\"") {
+        return None;
+    }
+    let d = s.find("\"delta\"")?;
+    json_str_field(&s[d..], "text")
 }
 
 /// Pull `choices[0].delta.content` out of one SSE `data:` JSON object.

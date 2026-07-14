@@ -2,7 +2,7 @@
 //! single-pixel pen paths (Zhang-Suen), trace them into ordered strokes, and
 //! yield them for stroke-by-stroke animation.
 
-use ab_glyph::{Font, FontRef, Glyph, PxScale, ScaleFont};
+use ab_glyph::{Font, FontVec, Glyph, PxScale, ScaleFont};
 
 pub struct Line {
     pub width: usize,
@@ -12,7 +12,7 @@ pub struct Line {
 }
 
 /// Rasterize one line of text at `px` height into a boolean mask.
-pub fn rasterize_line(font: &FontRef, text: &str, px: f32) -> Line {
+pub fn rasterize_line(font: &FontVec, text: &str, px: f32) -> Line {
     let scaled = font.as_scaled(PxScale::from(px));
     let mut glyphs: Vec<Glyph> = Vec::new();
     let mut caret = 0.0f32;
@@ -55,7 +55,7 @@ pub fn rasterize_line(font: &FontRef, text: &str, px: f32) -> Line {
 }
 
 /// Measure the advance width of text at `px` without rasterizing.
-pub fn measure(font: &FontRef, text: &str, px: f32) -> f32 {
+pub fn measure(font: &FontVec, text: &str, px: f32) -> f32 {
     let scaled = font.as_scaled(PxScale::from(px));
     let mut caret = 0.0f32;
     let mut prev: Option<ab_glyph::GlyphId> = None;
@@ -205,7 +205,7 @@ pub fn trace(line: &Line) -> Vec<Vec<(i32, i32)>> {
 }
 
 /// Word-wrap `text` to lines that fit `max_px` at scale `px`.
-pub fn wrap(font: &FontRef, text: &str, px: f32, max_px: f32) -> Vec<String> {
+pub fn wrap(font: &FontVec, text: &str, px: f32, max_px: f32) -> Vec<String> {
     let mut lines = Vec::new();
     for para in text.lines() {
         let mut cur = String::new();
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn pipeline_produces_strokes() {
-        let font = FontRef::try_from_slice(include_bytes!("../fonts/DancingScript.ttf")).unwrap();
+        let font = FontVec::try_from_vec(include_bytes!("../fonts/DancingScript.ttf").to_vec()).unwrap();
         let mut line = rasterize_line(&font, "Yes, Harry?", 96.0);
         assert!(line.width > 100 && line.height > 50);
         let inked_before: usize = line.mask.iter().filter(|&&v| v).count();

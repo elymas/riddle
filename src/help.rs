@@ -5,7 +5,7 @@
 use crate::fb::{BBox, SCREEN_H, SCREEN_W};
 use crate::script;
 use crate::surface::{Surface, BLACK, WHITE};
-use ab_glyph::FontRef;
+use ab_glyph::FontVec;
 
 /// Does the committed ink look like a single big "?" (with or without its
 /// dot)? Deliberately forgiving: a false positive only shows the guide.
@@ -144,7 +144,7 @@ pub struct Help {
 /// Draw the guide panel centered on the page; returns it for later dismissal.
 /// The gesture list depends on the display mode: only takeover owns the
 /// touchscreen (5-finger exit) and the power button.
-pub fn show(surf: &mut Surface, font: &FontRef, takeover: bool) -> Help {
+pub fn show(surf: &mut Surface, font: &FontVec, takeover: bool) -> Help {
     let body = if takeover { BODY_TAKEOVER } else { BODY_WINDOWED };
     let title_h = (TITLE_PX * 1.4) as usize;
     let line_h = (BODY_PX * 1.3) as usize;
@@ -191,7 +191,7 @@ impl Help {
 
 /// Replace the page with the full-screen sleep card; returns the saved page
 /// pixels so waking can restore them exactly.
-pub fn show_sleep(surf: &mut Surface, font: &FontRef) -> Vec<u8> {
+pub fn show_sleep(surf: &mut Surface, font: &FontVec) -> Vec<u8> {
     let saved = surf.copy_rect(0, 0, SCREEN_W, SCREEN_H);
     surf.fill_rect(0, 0, SCREEN_W, SCREEN_H, WHITE);
     frame(surf, 48, 48, SCREEN_W - 96, SCREEN_H - 96, 4);
@@ -213,7 +213,7 @@ fn frame(surf: &mut Surface, x: usize, y: usize, w: usize, h: usize, t: usize) {
     surf.fill_rect(x + w - t, y, t, h, BLACK);
 }
 
-fn blit_centered(surf: &mut Surface, font: &FontRef, text: &str, px_size: f32, panel_x: usize, panel_w: usize, y: usize) {
+fn blit_centered(surf: &mut Surface, font: &FontVec, text: &str, px_size: f32, panel_x: usize, panel_w: usize, y: usize) {
     let line = script::rasterize_line(font, text, px_size);
     let x = panel_x + panel_w.saturating_sub(line.width) / 2;
     for row in 0..line.height {
@@ -294,7 +294,7 @@ mod tests {
         let mut buf = vec![0xFFu8; w * h * 4];
         let ptr = buf.as_mut_ptr();
         let mut surf = Surface::new(ptr, buf.len(), w, h, w * 4, crate::surface::PixFmt::Rgb32);
-        let font = FontRef::try_from_slice(include_bytes!("../fonts/DancingScript.ttf")).unwrap();
+        let font = FontVec::try_from_vec(include_bytes!("../fonts/DancingScript.ttf").to_vec()).unwrap();
 
         // Scribble something under the panel area so restore is observable.
         surf.fill_rect(700, 1000, 200, 200, BLACK);
@@ -340,7 +340,7 @@ mod tests {
         let mut buf = vec![0xFFu8; w * h * 4];
         let ptr = buf.as_mut_ptr();
         let mut surf = Surface::new(ptr, buf.len(), w, h, w * 4, crate::surface::PixFmt::Rgb32);
-        let font = FontRef::try_from_slice(include_bytes!("../fonts/DancingScript.ttf")).unwrap();
+        let font = FontVec::try_from_vec(include_bytes!("../fonts/DancingScript.ttf").to_vec()).unwrap();
 
         surf.fill_rect(300, 300, 400, 400, BLACK);
         let before = surf.copy_rect(0, 0, w, h);

@@ -26,7 +26,7 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ab_glyph::FontRef;
+use ab_glyph::FontVec;
 
 use fb::{BBox, SCREEN_H, SCREEN_W};
 use oracle::Event;
@@ -180,7 +180,23 @@ fn build_ctx(store: &Option<memory::MemoryStore>) -> oracle::TurnContext {
 }
 
 fn run() -> std::io::Result<()> {
-    let font = FontRef::try_from_slice(FONT_TTF).map_err(std::io::Error::other)?;
+    // Reply hand: the embedded Dancing Script by default; override at runtime
+    // with RIDDLE_FONT=/path/to.ttf (e.g. a more legible or CJK-covering font)
+    // without rebuilding.
+    let font_bytes = match std::env::var("RIDDLE_FONT") {
+        Ok(path) => match std::fs::read(&path) {
+            Ok(b) => {
+                eprintln!("riddle: reply font {path}");
+                b
+            }
+            Err(e) => {
+                eprintln!("riddle: RIDDLE_FONT {path} unreadable ({e}) — using built-in");
+                FONT_TTF.to_vec()
+            }
+        },
+        Err(_) => FONT_TTF.to_vec(),
+    };
+    let font = FontVec::try_from_vec(font_bytes).map_err(std::io::Error::other)?;
 
     let (disp, mut surf) = display::Display::open()?;
     let takeover = matches!(disp, display::Display::Quill);
@@ -794,7 +810,7 @@ fn oracle_excuse(e: &str) -> String {
 /// the memory's rewriting — the date in a small hand, the writer's own strokes
 /// exactly as they were penned, Tom's old reply beneath — all in faded ink.
 fn conjure(
-    font: &FontRef,
+    font: &FontVec,
     store: &Option<memory::MemoryStore>,
     id: u64,
     surf: &mut Surface,
@@ -859,7 +875,7 @@ fn conjure(
 
 /// Lay out reply text and produce screen-space strokes. `y_start` continues a
 /// streamed reply below its previous chunk; None places the first chunk.
-fn plan_reply(font: &FontRef, text: &str, y_start: Option<i32>) -> WritePlan {
+fn plan_reply(font: &FontVec, text: &str, y_start: Option<i32>) -> WritePlan {
     let max_w = (SCREEN_W as i32 - 2 * MARGIN_X) as f32;
     let lines = script::wrap(font, text, REPLY_PX, max_w);
     let line_h = (REPLY_PX * 1.25) as i32;
@@ -893,7 +909,7 @@ fn plan_reply(font: &FontRef, text: &str, y_start: Option<i32>) -> WritePlan {
 }
 
 /// Splice a streamed continuation chunk into a running write animation.
-fn append_reply(font: &FontRef, plan: &mut WritePlan, more: &str) {
+fn append_reply(font: &FontVec, plan: &mut WritePlan, more: &str) {
     let cont = plan_reply(font, more, Some(plan.next_y));
     if cont.strokes.is_empty() {
         return;
