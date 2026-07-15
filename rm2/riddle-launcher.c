@@ -1,7 +1,8 @@
-// riddle-launcher — watch the reMarkable 2 touchscreen for a 5-finger tap and
-// launch the diary. Runs while xochitl is up; reads the touch device WITHOUT
-// grabbing it, so normal use is unaffected. When riddle itself runs it grabs
-// the device (EVIOCGRAB), so this watcher goes quiet until riddle exits.
+// riddle-launcher — watch the reMarkable 2 touchscreen for a 5-finger
+// DOUBLE-tap (two 5-finger taps within 600ms) and launch the diary. Runs
+// while xochitl is up; reads the touch device WITHOUT grabbing it, so normal
+// use is unaffected. When riddle itself runs it grabs the device (EVIOCGRAB),
+// so this watcher goes quiet until riddle exits.
 //
 // Build (rM2 SDK): $CC riddle-launcher.c -O2 -o riddle-launcher
 // Install: see rm2/install-launcher.sh
@@ -84,6 +85,7 @@ int main(void) {
     int active[MAX_SLOTS] = {0};   // slot -> tracking id != -1
     int cur = 0;
     int armed = 1;                 // rising-edge guard: re-arm when fingers < 5
+    long long tap_ms = -1;         // when the previous 5-finger tap landed
 
     for (;;) {
         if (fd < 0) {
@@ -107,12 +109,23 @@ int main(void) {
             int count = 0;
             for (int i = 0; i < MAX_SLOTS; i++) count += active[i];
             if (count < FINGERS) armed = 1;
-            // ponytail: rising-edge on >=5 simultaneous slots. A resting palm
-            // can occasionally trip this; if false positives bite, gate on a
-            // brief tap (all 5 down then up within ~700ms, low motion).
+            // Double-tap: two >=5-finger rising edges 120..600ms apart.
+            // `armed` forces a release between edges; <120ms is contact
+            // bounce (ignored, still waiting for the real second tap).
+            // A resting palm gives one edge only, so it can no longer
+            // launch by itself.
             if (count >= FINGERS && armed && !riddle_running()) {
                 armed = 0;
-                launch();
+                struct timespec ts;
+                clock_gettime(CLOCK_MONOTONIC, &ts);
+                long long now = ts.tv_sec * 1000LL + ts.tv_nsec / 1000000;
+                long long gap = now - tap_ms;
+                if (tap_ms < 0 || gap > 600) {
+                    tap_ms = now;          // first tap (or window expired)
+                } else if (gap >= 120) {
+                    tap_ms = -1;
+                    launch();
+                }
             }
         }
     }
