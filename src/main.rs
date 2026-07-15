@@ -642,7 +642,7 @@ fn run() -> std::io::Result<()> {
                         }
                         turn_strokes = Vec::new();
                         let chars: usize = plan.strokes.iter().map(|s| s.len()).sum();
-                        let linger = Duration::from_millis(4000 + (chars as u64) * 2);
+                        let linger = Duration::from_millis(1000 + (chars as u64) * 2);
                         let region = plan.region;
                         State::Lingering { until: Instant::now() + linger.min(Duration::from_secs(20)), region }
                     } else {
