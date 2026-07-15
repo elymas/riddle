@@ -1,5 +1,33 @@
 # riddle — the diary of Tom Riddle, for the reMarkable Paper Pro
 
+> ### 📓 This fork: riddle on the reMarkable 2
+>
+> This fork of [MaximeRivest/riddle](https://github.com/MaximeRivest/riddle)
+> ports the takeover flavour to the **reMarkable 2** (armv7, OS 3.28). The
+> port lives on the [`rm2-port`](../../tree/rm2-port) branch; `main` tracks
+> upstream. What the port adds:
+>
+> - **A clean-room quill shim for the rM2's e-ink engine**
+>   (`rm2/quill_rm2.cpp`) — the rM2's `libqsgepaper.so` has a different C++
+>   ABI than the Paper Pro's, so the 7-function quill C ABI was reimplemented
+>   from a disassembly of `EPFramebufferCarta1000`. Real-time, non-flashing,
+>   region-scoped ink.
+> - **rM2 input handling** — Wacom I2C pen (rotated axes) and `pt_mt` touch,
+>   using 32-bit-kernel evdev records.
+> - **A native Anthropic (Claude) oracle backend** — `RIDDLE_ANTHROPIC_KEY`,
+>   streaming Messages API. ~1.0 s to first ink with Claude Haiku 4.5.
+> - **A 5-finger double-tap launcher daemon** — AppLoad crash-loops on
+>   OS 3.28, so a tiny libc daemon watches the touchscreen (without grabbing
+>   it) and launches the diary on a 5-finger double-tap.
+> - **`RIDDLE_FONT` runtime reply-font override** — swap the reply hand
+>   without rebuilding, e.g. point it at Noto Sans KR for Korean coverage.
+> - **Glyph fixes** — `.notdef` glyphs are skipped so smart quotes no longer
+>   render as tofu boxes (applies upstream too).
+>
+> Build, deploy, and internals: [`rm2/PORTING-NOTES.md`](rm2/PORTING-NOTES.md)
+> on the `rm2-port` branch. Everything below is the upstream README and
+> describes the reMarkable Paper Pro.
+
 Write on the page with your pen. After a pause, the diary **drinks your ink** —
 your words fade into the paper — the page thinks for a moment, and an answer
 writes itself back in a flowing hand, stroke by stroke, then fades away.
