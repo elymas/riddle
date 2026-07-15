@@ -3,9 +3,11 @@
 > ### 📓 This fork: riddle on the reMarkable 2
 >
 > This fork of [MaximeRivest/riddle](https://github.com/MaximeRivest/riddle)
-> ports the takeover flavour to the **reMarkable 2** (armv7, OS 3.28). The
-> port lives on the [`rm2-port`](../../tree/rm2-port) branch; `main` tracks
-> upstream. What the port adds:
+> ports the takeover flavour to the **reMarkable 2** (armv7). Tested on a
+> reMarkable 2 running **OS beta 3.28.0.162** — other OS versions are
+> untested and may not work. The port lives on the
+> [`rm2-port`](../../tree/rm2-port) branch; `main` tracks upstream. What the
+> port adds:
 >
 > - **A clean-room quill shim for the rM2's e-ink engine**
 >   (`rm2/quill_rm2.cpp`) — the rM2's `libqsgepaper.so` has a different C++
