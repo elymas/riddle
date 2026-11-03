@@ -103,8 +103,9 @@ With the old hard-coded `+0x50`, riddle exits with `quill_init failed` on
 object for words equal to a local `QImage`'s vtable pointer (same
 `libQt6Gui`, so they match) and takes the first one whose format is RGB32. The
 chosen offset is logged as `quill: frame buffer QImage at instance+0x..`.
-Verified on 3.29.1.0 (`+0x58`). Both offsets fall inside the 3.28 object, so
-one build covers both OS versions.
+Verified on 3.29.1.0 (`+0x58`): live pen ink, the oracle reply, and the
+five-finger launcher entry and exit all work. Both offsets fall inside the
+3.28 object, so one build covers both OS versions.
 
 To check a new OS quickly, compare the `EPFramebuffer::EPFramebuffer()`
 disassembly (the `add r0, r4, #N` before each `QImage::QImage()` call) between
