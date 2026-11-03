@@ -11,8 +11,9 @@ just ink appearing on paper. See the
 app (reMarkable Paper Pro) and the full feature story.
 
 **Tested on a reMarkable 2 running OS beta 3.28.0.162** (armv7, kernel
-5.4.70-v1.6.3-rm11x, Qt 6.10.3). Other models and OS versions are untested and
-may not work.
+5.4.70-v1.6.3-rm11x, Qt 6.10.3) **and OS 3.29.1.0** (kernel
+5.4.70-v1.6.4-rm11x). Other models and OS versions are untested and may not
+work.
 
 > ⚠️ **This modifies your device.** The port runs in takeover mode: it stops
 > xochitl (the reMarkable UI) and drives the e-ink panel directly, as root.
@@ -49,8 +50,8 @@ Two things the repository cannot ship:
 
 1. **The vendor e-ink library** — `libqsgepaper.so` is reMarkable's
    proprietary engine and is not distributed here (git-ignored). It must come
-   from *your own device* running OS 3.28.x (the 3.28 firmware added the
-   symbols the shim resolves; the SDK 3.27 copy won't do):
+   from *your own device* running OS 3.28.x or later (the 3.28 firmware added
+   the symbols the shim resolves; the SDK 3.27 copy won't do):
 
    ```sh
    mkdir -p rm2/vendor
@@ -129,7 +130,7 @@ Korean coverage. Falls back to the built-in font if the path is unreadable.
 
 [`rm2/PORTING-NOTES.md`](rm2/PORTING-NOTES.md) documents the whole journey:
 how the panel is actually driven (`swapBuffers`, `EPScreenModeMap`, the real
-framebuffer at `instance + 0x50`), the dead ends so nobody repeats them, input
+framebuffer at `instance + 0x50`, `+0x58` on OS 3.29), the dead ends so nobody repeats them, input
 quirks, and the build details.
 
 ## Branches
