@@ -4,6 +4,8 @@ Working port of riddle (takeover flavour) to the **reMarkable 2**, OS
 **3.28.0.162** (kernel 5.4.70-v1.6.3-rm11x, armv7l, glibc 2.39, Qt 6.10.3).
 Verified on-device: live pen ink (real-time, non-flashing), correct pen
 orientation, five-finger exit, and the OpenAI-compatible oracle round-trip.
+Also runs on OS **3.29.1.0** (kernel 5.4.70-v1.6.4-rm11x, same Qt 6.10.3) —
+see "OS 3.29 layout shift" below.
 
 ## The hard part: driving the e-ink panel
 
@@ -24,7 +26,7 @@ facts (all verified on the device):
   QImage at `+0x60` is a *secondary* buffer and is **not** what the panel
   renders from — writing it was the single biggest dead end in the port.
   riddle's existing `Surface::Rgb32` (bytes B,G,R,0xFF) matches this buffer
-  exactly.
+  exactly. (Offsets are for OS 3.28; on 3.29 they moved by +8 — see below.)
 - **Flush = `swapBuffers(QRegion, EPScreenModeMap, QFlags<UpdateFlag>)`.**
   Internally it clips the region to the framebuffer, splits it per screen mode,
   and calls `EPFramebufferSwtcon::update()` per rect. The update **region comes
@@ -80,8 +82,33 @@ scp -O root@10.11.99.1:/usr/lib/plugins/scenegraph/libqsgepaper.so rm2/vendor/
 ```
 
 If the offsets/symbols drift on a future OS, re-pull and re-verify the layout
-constants in `quill_rm2.cpp` (`FB_QIMAGE_OFFSET`, the RGB32 format check) with
-`nm -D rm2/vendor/libqsgepaper.so | c++filt`.
+constants in `quill_rm2.cpp` (`FB_SCAN_FROM`/`FB_SCAN_TO`, the RGB32 format
+check) with `nm -D rm2/vendor/libqsgepaper.so | c++filt`.
+
+### OS 3.29 layout shift
+
+OS 3.29.1.0 ships a new `libqsgepaper.so`. The four symbols the shim uses are
+unchanged, but `EPScreenModeMap` grew from 48 to 56 bytes, and it is the
+`EPFramebuffer` member at `+0x20`, so everything after it moved by 8:
+
+| member | 3.28.0.162 | 3.29.1.0 |
+|---|---|---|
+| RGB32 frame-buffer `QImage` | `+0x50` | `+0x58` |
+| pointer read by `swapBuffers_impl` | `+0x5c` | `+0x64` |
+| Grayscale8 `QImage` | `+0x60` | `+0x68` |
+| `std::deque<EPScreenModeMap>` (new, global screen-mode stack) | — | `+0x7c` |
+
+With the old hard-coded `+0x50`, riddle exits with `quill_init failed` on
+3.29. `quill_init()` now finds the member at runtime instead: it scans the
+object for words equal to a local `QImage`'s vtable pointer (same
+`libQt6Gui`, so they match) and takes the first one whose format is RGB32. The
+chosen offset is logged as `quill: frame buffer QImage at instance+0x..`.
+Verified on 3.29.1.0 (`+0x58`). Both offsets fall inside the 3.28 object, so
+one build covers both OS versions.
+
+To check a new OS quickly, compare the `EPFramebuffer::EPFramebuffer()`
+disassembly (the `add r0, r4, #N` before each `QImage::QImage()` call) between
+the old and new lib with the SDK's `arm-remarkable-linux-gnueabi-objdump -d -C`.
 
 ### 2. The rM2 SDK 3.27 Docker image (`rm2sdk:latest`)
 

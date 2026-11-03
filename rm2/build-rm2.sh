@@ -5,7 +5,7 @@
 # Prereqs (one-time, done by setup):
 #   - docker image `rm2sdk:latest` with the SDK at /opt/rm2-sdk
 #     (install remarkable-production-image-5.7.119-rm2-public-x86_64-toolchain.sh)
-#   - rm2/vendor/libqsgepaper.so pulled from the TARGET DEVICE (OS 3.28) —
+#   - rm2/vendor/libqsgepaper.so pulled from the TARGET DEVICE (OS 3.28+) —
 #     the SDK 3.27 copy lacks the swapBuffers(QRect,...) overload we link.
 #
 # Outputs:

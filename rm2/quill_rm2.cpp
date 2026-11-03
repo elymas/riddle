@@ -9,6 +9,8 @@
 //  - The REAL frame buffer the engine renders from is the inline QImage at
 //    instance+0x50 — Format_RGB32 (BGRA, 4 bytes/px, stride 5616), NOT the
 //    Grayscale8 QImage at +0x60. Writing +0x50's bits reaches the panel.
+//    OS 3.29.1.0 grew EPScreenModeMap by 8 bytes, moving both QImages to
+//    +0x58 / +0x68, so quill_init() now locates the RGB32 one at runtime.
 //  - swapBuffers(QRegion, EPScreenModeMap, flags) is the flush. Internally it
 //    clips the region to the framebuffer, splits it per screen-mode, and calls
 //    EPFramebufferSwtcon::update() per rect — a true region-scoped update.
@@ -23,6 +25,7 @@
 #include <QRegion>
 #include <QSize>
 #include <cstdint>
+#include <cstdio>
 #include <dlfcn.h>
 #include <vector>
 
@@ -30,8 +33,10 @@ enum EPScreenMode { EPS_Pen = 0, EPS_Mono = 1, EPS_Animate = 2, EPS_Gray = 3, EP
 struct Translation { EPScreenMode mode; int slot; };
 class EPFramebuffer { public: static EPFramebuffer* instance(); };
 
-// Inline frameBuffer QImage member offset (disassembly + probe verified).
-static const int FB_QIMAGE_OFFSET = 0x50;
+// Inline frameBuffer QImage member window (disassembly verified): +0x50 on
+// OS 3.28.0.162, +0x58 on 3.29.1.0. 0x78 is the 3.28 object size, so the scan
+// never reads past the object on either build.
+static const int FB_SCAN_FROM = 0x20, FB_SCAN_TO = 0x78;
 static const int MAP_BUF = 512;
 
 static int g_w = 1404, g_h = 1872, g_stride = 5616;
@@ -65,7 +70,19 @@ int quill_init() {
     g_fb = EPFramebuffer::instance();
     if (!g_fb) return 1;
 
-    QImage* engineFb = (QImage*)((char*)g_fb + FB_QIMAGE_OFFSET);
+    // Find the inline QImage members by their vtable pointer (same libQt6Gui,
+    // so a local QImage carries the identical one); take the RGB32 one.
+    QImage probe;
+    void* const qimageVtbl = *(void**)&probe;
+    QImage* engineFb = nullptr;
+    for (int off = FB_SCAN_FROM; off < FB_SCAN_TO && !engineFb; off += 4) {
+        QImage* cand = (QImage*)((char*)g_fb + off);
+        if (*(void**)cand == qimageVtbl && cand->format() == QImage::Format_RGB32) {
+            engineFb = cand;
+            fprintf(stderr, "quill: frame buffer QImage at instance+0x%x\n", off);
+        }
+    }
+    if (!engineFb) return 2;
     g_w = engineFb->width();
     g_h = engineFb->height();
     g_stride = (int)engineFb->bytesPerLine();
